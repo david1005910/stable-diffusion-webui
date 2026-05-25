@@ -11,8 +11,8 @@
 
 | Change | Why |
 |---|---|
-| `venv` created from the `comfyui` conda env (Python 3.10 + `torch 2.6.0+rocm6.2`) | Reuses an existing ROCm-enabled PyTorch — no CUDA required |
-| `webui-user.sh` — `python_cmd` set to comfyui Python 3.10 | Ensures the correct interpreter is used by `webui.sh` |
+| `webui-user.sh` — bootstraps venv, sets AMD env vars and launch flags | `./webui.sh` works out of the box with no extra steps |
+| `venv` created with `--system-site-packages` from the `comfyui` conda env (Python 3.10 + `torch 2.6.0+rocm6.2`) | Reuses an existing ROCm-enabled PyTorch — no CUDA required, no 2 GB download |
 | `repositories/stable-diffusion-stability-ai` — cloned from `CompVis/stable-diffusion` with compatibility stubs | `Stability-AI/stablediffusion` was deleted from GitHub; these stubs fill in the missing API surface |
 | `.claude/skills/run-stable-diffusion-webui/` — `setup.sh` + `smoke.sh` | One-command environment setup and headless smoke test |
 
@@ -42,39 +42,40 @@ The webui expects `Stability-AI/stablediffusion` (their SD2 fork) which no longe
 
 ## Quick start
 
-### 1. One-time setup
+### 1. Prerequisites
+
+- The `comfyui` conda environment must exist at `/home/david1/anaconda3/envs/comfyui` — it provides Python 3.10 and `torch 2.6.0+rocm6.2`.
+- `git` must be on `PATH`.
+
+No other setup is needed before the first run.
+
+### 2. Run
 
 ```bash
-bash .claude/skills/run-stable-diffusion-webui/setup.sh
+./webui.sh
 ```
 
-This creates the venv, installs all dependencies, and clones the required repositories.
+That's it. On first run, `webui-user.sh` automatically:
+1. Creates `venv/` with `--system-site-packages` (inherits torch from the comfyui env — no download)
+2. Clones the five required repositories into `repositories/`
+3. Installs remaining Python dependencies into the venv
 
-### 2. Smoke test (headless)
+On subsequent runs the venv and repos already exist, so startup takes only a few seconds.
+
+Open **http://127.0.0.1:7860** in your browser. On first run without a model it will download `v1-5-pruned-emaonly.safetensors` (~4 GB). To skip that during testing:
+
+```bash
+./webui.sh --ckpt test/test_files/empty.pt
+```
+
+### 3. Smoke test (headless)
 
 ```bash
 bash .claude/skills/run-stable-diffusion-webui/smoke.sh
-# Screenshot → /tmp/sdwebui-screenshot.png
+# Curl checks + screenshot → /tmp/sdwebui-screenshot.png
 ```
 
-Launches the server with the empty test checkpoint (no model download), runs curl checks, takes a screenshot, and shuts down cleanly.
-
-### 3. Run interactively
-
-```bash
-HSA_OVERRIDE_GFX_VERSION=9.0.0 \
-  venv/bin/python launch.py \
-    --skip-prepare-environment \
-    --skip-torch-cuda-test \
-    --skip-python-version-check \
-    --no-half \
-    --use-cpu all \
-    --do-not-download-clip \
-    --port 7860
-```
-
-Open **http://127.0.0.1:7860** in your browser.  
-On first run without `--ckpt`, it downloads `v1-5-pruned-emaonly.safetensors` (~4 GB). To skip that during testing add `--ckpt test/test_files/empty.pt`.
+Launches with the empty test checkpoint, runs three curl checks, saves a headless Chrome screenshot, then shuts the server down.
 
 ---
 
