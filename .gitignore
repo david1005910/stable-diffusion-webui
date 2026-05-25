@@ -22,7 +22,8 @@ __pycache__
 /params.txt
 /styles.csv.bak
 /webui-user.bat
-/webui-user.sh
+# webui-user.sh is tracked in this fork — it ships AMD Renoir defaults out of the box
+#/webui-user.sh
 /interrogate
 /user.css
 /.idea
