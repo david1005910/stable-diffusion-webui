@@ -1,0 +1,131 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Running the Application
+
+```bash
+# Linux/Mac — handles all setup automatically
+./webui.sh
+
+# Windows
+webui.bat
+
+# Direct Python launch (after environment is prepared)
+python launch.py
+
+# API-only mode (no Gradio UI)
+python launch.py --nowebui
+
+# CPU-only for testing (no GPU required)
+python launch.py --skip-prepare-environment --skip-torch-cuda-test --no-half --disable-opt-split-attention --use-cpu all
+```
+
+Key CLI flags in `modules/cmd_args.py`: `--lowvram`/`--medvram` (VRAM optimization), `--api` (enable REST API alongside UI), `--share` (Gradio public link), `--listen` (bind to all interfaces), `--port` (default 7860).
+
+## Linting
+
+```bash
+# Python — Ruff (configured in pyproject.toml)
+ruff check .
+ruff check --fix .
+
+# JavaScript — ESLint (configured in .eslintrc.js)
+npm run lint
+npm run fix
+```
+
+Ruff ignores E501, E721, E731, I001, C901. The `extensions/` and `extensions-disabled/` directories are excluded from linting.
+
+## Testing
+
+Tests require a running server. The CI workflow starts the server first, then runs pytest against it:
+
+```bash
+# 1. Install test dependencies
+pip install wait-for-it -r requirements-test.txt
+
+# 2. Set up environment (downloads dependencies)
+python launch.py --skip-torch-cuda-test --exit
+
+# 3. Start test server in background
+python launch.py --skip-prepare-environment --skip-torch-cuda-test --test-server \
+    --do-not-download-clip --no-half --disable-opt-split-attention --use-cpu all --api-server-stop &
+
+# 4. Wait for server and run tests
+wait-for-it --service 127.0.0.1:7860 -t 20
+python -m pytest -vv --junitxml=test/results.xml --cov . --cov-report=xml --verify-base-url test
+
+# Run a single test file
+python -m pytest test/test_txt2img.py -vv --verify-base-url
+
+# Stop test server
+curl -XPOST http://127.0.0.1:7860/sdapi/v1/server-stop
+```
+
+The pytest base URL is `http://127.0.0.1:7860` (configured in `pyproject.toml`). Python 3.10.6 is the recommended version.
+
+## Architecture
+
+### Request Flow
+
+```
+User (Browser/API client)
+  → Gradio UI (modules/ui.py)  OR  REST API (modules/api/api.py)
+  → Processing pipeline (modules/processing.py)
+      → Model loading (modules/sd_models.py)
+      → Text encoding (CLIP via modules/sd_hijack.py)
+      → Sampling loop (modules/sd_samplers*.py + modules/sd_schedulers.py)
+      → VAE decode (modules/sd_vae*.py)
+      → Post-processing (modules/postprocessing.py, modules/extras.py)
+  → Image save (modules/images.py) + display in gallery
+```
+
+### Key Modules
+
+| Module | Role |
+|---|---|
+| `webui.py` | Entry point; creates Gradio app and mounts FastAPI |
+| `modules/launch_utils.py` | Environment setup, dependency installation |
+| `modules/shared.py` | Global state: `sd_model`, `opts`, `state`, `device`, `prompt_styles` |
+| `modules/processing.py` | `StableDiffusionProcessingTxt2Img` / `Img2Img` dataclasses + `process_images()` |
+| `modules/sd_models.py` | Checkpoint discovery, loading, unloading, VRAM management |
+| `modules/sd_samplers*.py` | Sampler implementations (Euler, DPM++, DDIM, etc.) and CFG denoiser |
+| `modules/sd_schedulers.py` | Noise schedules (Karras, exponential, etc.) |
+| `modules/sd_hijack*.py` | PyTorch patches for attention optimization (xformers, sub-quadratic) |
+| `modules/ui.py` | Gradio `Blocks` layout with all tabs |
+| `modules/scripts.py` | Script/extension lifecycle; `Script` base class |
+| `modules/script_callbacks.py` | Hook system for extensions (image save, UI, sampler, etc.) |
+| `modules/api/api.py` | FastAPI endpoints: `/sdapi/v1/txt2img`, `/sdapi/v1/img2img`, etc. |
+| `modules/images.py` | Image save/load, PNG metadata, grid generation |
+| `modules/devices.py` | CUDA/MPS/CPU detection, dtype helpers |
+
+### Global State (`modules/shared`)
+
+The `modules.shared` module is a global namespace (not a class instance). Commonly accessed fields:
+- `shared.sd_model` — currently loaded diffusion model
+- `shared.opts` — persistent user settings (`Options` object, saved to `config.json`)
+- `shared.state` — generation state (progress, interrupt flag, job info)
+- `shared.cmd_opts` — parsed CLI arguments
+- `shared.device` — active torch device
+
+### Extension / Script System
+
+**Custom scripts** go in `scripts/`. Built-in extensions live in `extensions-builtin/`; user-installed extensions in `extensions/`.
+
+To write a script, subclass `modules.scripts.Script`:
+- `title()` — display name
+- `ui(is_img2img)` — return Gradio components
+- `run(p, *args)` — called for generation (override for exclusive control)
+- `process(p, *args)` — called before sampling (for modifications)
+- `postprocess(p, processed, *args)` — called after generation
+
+Use `modules.script_callbacks` to hook into events without subclassing `Script` (e.g., `on_image_saved`, `on_ui_tabs`, `on_cfg_denoiser`).
+
+### Model Support
+
+The codebase handles SD1.x, SD2.x, SDXL, SSD-1B, and SD3. Model type detection happens in `modules/sd_models.py` and `modules/sd_models_config.py`. SD3-specific code is in `modules/models/sd3/`. SDXL-specific handling is in `modules/sd_models_xl.py`.
+
+### Frontend
+
+Gradio generates the HTML/JS shell. Additional interactivity is in `javascript/` (vanilla JS). Custom HTML fragments are in `html/`. The Gradio component tree is built in `modules/ui.py` using `gr.Blocks` context managers; component references are stored in `modules/shared.settings_components` after UI initialization.
