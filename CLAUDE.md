@@ -5,23 +5,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Running the Application
 
 ```bash
-# Linux/Mac — handles all setup automatically
+# Standard launch — venv bootstrap, repo cloning, and dep install are all
+# handled automatically by webui-user.sh on the first run.
 ./webui.sh
+
+# Skip the 4 GB model download during development/testing
+./webui.sh --ckpt test/test_files/empty.pt
 
 # Windows
 webui.bat
 
-# Direct Python launch (after environment is prepared)
-python launch.py
-
 # API-only mode (no Gradio UI)
-python launch.py --nowebui
-
-# CPU-only for testing (no GPU required)
-python launch.py --skip-prepare-environment --skip-torch-cuda-test --no-half --disable-opt-split-attention --use-cpu all
+./webui.sh --nowebui
 ```
 
-Key CLI flags in `modules/cmd_args.py`: `--lowvram`/`--medvram` (VRAM optimization), `--api` (enable REST API alongside UI), `--share` (Gradio public link), `--listen` (bind to all interfaces), `--port` (default 7860).
+**This fork's `webui-user.sh`** configures the environment for AMD Renoir/Cezanne iGPU:
+- Bootstraps `venv/` with `--system-site-packages` on first run (inherits `torch 2.6.0+rocm6.2` from the `comfyui` conda env — no PyTorch download needed)
+- Exports `HSA_OVERRIDE_GFX_VERSION=9.0.0` (required for AMD Renoir ROCm recognition)
+- Passes `--skip-prepare-environment --no-half --skip-torch-cuda-test --do-not-download-clip` automatically
+
+**Note:** do not pass `--api` — FastAPI 0.94 / starlette 0.26 crash when adding middleware after app start. The Gradio queue and info routes (`/queue/status`, `/info`) still work without it.
+
+Key CLI flags in `modules/cmd_args.py`: `--lowvram`/`--medvram` (VRAM optimization), `--share` (Gradio public link), `--listen` (bind to all interfaces), `--port` (default 7860).
 
 ## Linting
 
