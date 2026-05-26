@@ -47,9 +47,8 @@ clone_if_missing() {
 }
 
 # NOTE: Stability-AI/stablediffusion was deleted from GitHub.
-# CompVis/stable-diffusion is used as the substitute; compatibility stubs
-# were already applied to the checked-out repo (see ldm/modules/midas,
-# ldm/data/util.py, ldm/models/diffusion/ddpm.py, ldm/modules/attention.py).
+# CompVis/stable-diffusion is used as the substitute; compatibility patches
+# are applied below (step 4) to fill in the missing API surface.
 clone_if_missing \
   https://github.com/CompVis/stable-diffusion.git \
   "$REPOS/stable-diffusion-stability-ai" \
@@ -76,12 +75,122 @@ clone_if_missing \
   "webui-assets"
 
 # ── 4. Apply compatibility patches to the CompVis repo ───────────────────────
-# These patches are already committed in this repo under:
-#   repositories/stable-diffusion-stability-ai/ldm/modules/midas/
-#   repositories/stable-diffusion-stability-ai/ldm/data/util.py
-#   (stubs for symbols removed when Stability AI deleted their fork)
-# The patches in ldm/modules/attention.py and ldm/models/diffusion/ddpm.py
-# are checked in at the time of setup — they persist across re-runs.
+# Stability-AI added several symbols to their fork that the webui depends on.
+# CompVis/stable-diffusion lacks them. We patch after clone so any fresh
+# setup (on a new machine or after wiping repositories/) gets the patches too.
+# All patches are idempotent — safe to apply multiple times.
+
+SD_REPO="$REPOS/stable-diffusion-stability-ai"
+echo "Applying compatibility patches to CompVis/stable-diffusion..."
+
+# 4a. MiDaS depth-estimation stub (ldm/modules/midas/)
+mkdir -p "$SD_REPO/ldm/modules/midas"
+cat > "$SD_REPO/ldm/modules/midas/__init__.py" << 'EOF'
+from . import api
+EOF
+
+cat > "$SD_REPO/ldm/modules/midas/api.py" << 'EOF'
+# Compatibility stub: Stability-AI added MiDaS depth support; CompVis did not.
+# SD 1.5 inference never calls these — stubs prevent ImportError.
+ISL_PATHS = {
+    "dpt_large": "dpt_large-midas-2f21e586.pt",
+    "dpt_hybrid": "dpt_hybrid-midas-501f0c75.pt",
+    "midas_v21": "midas_v21-f6b98070.pt",
+    "midas_v21_small": "midas_v21_small-70d6b9c8.pt",
+}
+
+def load_model(model_type):
+    raise NotImplementedError(
+        "MiDaS depth model not available in CompVis/stable-diffusion. "
+        "This stub prevents import errors for SD 1.5 which does not use depth conditioning."
+    )
+EOF
+
+# 4b. AddMiDaS transform stub (ldm/data/util.py)
+mkdir -p "$SD_REPO/ldm/data"
+touch "$SD_REPO/ldm/data/__init__.py"
+if ! grep -q "AddMiDaS" "$SD_REPO/ldm/data/util.py" 2>/dev/null; then
+cat >> "$SD_REPO/ldm/data/util.py" << 'EOF'
+
+# Compatibility stub: AddMiDaS was added in Stability-AI fork.
+class AddMiDaS:
+    """Stub: depth-conditioned transform not needed for SD 1.5."""
+    def __init__(self, model_type="dpt_hybrid"):
+        self.model_type = model_type
+
+    def __call__(self, sample):
+        raise NotImplementedError(
+            "AddMiDaS is a depth-conditioning transform not available in "
+            "CompVis/stable-diffusion. This stub prevents import errors."
+        )
+EOF
+fi
+
+# 4c. LatentDepth2ImageDiffusion / LatentInpaintDiffusion stubs (ddpm.py)
+if ! grep -q "LatentDepth2ImageDiffusion" "$SD_REPO/ldm/models/diffusion/ddpm.py"; then
+cat >> "$SD_REPO/ldm/models/diffusion/ddpm.py" << 'EOF'
+
+# ── Compatibility stubs for symbols added in Stability-AI fork ───────────────
+class LatentDepth2ImageDiffusion(LatentDiffusion):
+    """Stub: Depth-guided image diffusion (Stability-AI fork only)."""
+    pass
+
+class LatentInpaintDiffusion(LatentDiffusion):
+    """Stub: Inpainting diffusion (Stability-AI fork only)."""
+    pass
+EOF
+fi
+
+# 4d. ATTENTION_MODES on BasicTransformerBlock + use_linear on SpatialTransformer
+# (both attributes were added in the Stability-AI fork; webui's sd_hijack_unet
+#  checks them at runtime via getattr)
+ATTN="$SD_REPO/ldm/modules/attention.py"
+if ! grep -q "ATTENTION_MODES" "$ATTN"; then
+  ATTN_PATH="$ATTN" python3 - << 'PYEOF'
+import os
+path = os.environ['ATTN_PATH']
+with open(path) as f:
+    src = f.read()
+old = 'class BasicTransformerBlock(nn.Module):\n    def __init__'
+new = (
+    'class BasicTransformerBlock(nn.Module):\n'
+    '    # ATTENTION_MODES added for compatibility with AUTOMATIC1111 webui\n'
+    '    ATTENTION_MODES = {\n'
+    '        "softmax": CrossAttention,\n'
+    '        "softmax-xformers": CrossAttention,\n'
+    '    }\n\n'
+    '    def __init__'
+)
+assert old in src, f"Could not find BasicTransformerBlock.__init__ in {path}"
+src = src.replace(old, new, 1)
+with open(path, 'w') as f:
+    f.write(src)
+print(f"  Patched: ATTENTION_MODES added to BasicTransformerBlock")
+PYEOF
+fi
+
+if ! grep -q "use_linear" "$ATTN"; then
+  ATTN_PATH="$ATTN" python3 - << 'PYEOF'
+import os
+path = os.environ['ATTN_PATH']
+with open(path) as f:
+    src = f.read()
+old = 'class SpatialTransformer(nn.Module):\n    """\n'
+new = (
+    'class SpatialTransformer(nn.Module):\n'
+    '    # use_linear=False: CompVis always uses Conv2d projection (not linear).\n'
+    '    # Added for compatibility with AUTOMATIC1111\'s sd_hijack_unet which checks\n'
+    '    # this attribute (the attribute was introduced in Stability-AI/stablediffusion).\n'
+    '    use_linear = False\n\n'
+    '    """\n'
+)
+assert old in src, f"Could not find SpatialTransformer docstring in {path}"
+src = src.replace(old, new, 1)
+with open(path, 'w') as f:
+    f.write(src)
+print(f"  Patched: use_linear = False added to SpatialTransformer")
+PYEOF
+fi
 
 echo ""
 echo "Setup complete. Run smoke.sh to launch and verify."
