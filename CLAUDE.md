@@ -41,6 +41,8 @@ webui.bat
 - Bootstraps `venv/` with `--system-site-packages` on first run (inherits `torch 2.6.0+rocm6.2` from the `comfyui` conda env — no PyTorch download needed)
 - Exports `HSA_OVERRIDE_GFX_VERSION=9.0.0` (required for AMD Renoir ROCm recognition)
 - Passes `--skip-prepare-environment --no-half --skip-torch-cuda-test --skip-python-version-check --do-not-download-clip` automatically
+- Sets `TORCH_COMMAND="echo '...skipping'"` — prevents `launch.py` from downloading a 2 GB PyTorch wheel if `--skip-prepare-environment` is ever removed
+- Sets `STABLE_DIFFUSION_REPO` / `STABLE_DIFFUSION_COMMIT_HASH` — redirect `launch.py`'s git-fetch from the deleted Stability AI repo to the CompVis substitute
 
 **Note:** do not pass `--api` — FastAPI 0.94 / starlette 0.26 crash when adding middleware after app start. The Gradio queue and info routes (`/queue/status`, `/info`) still work without it.
 
@@ -104,6 +106,8 @@ curl -XPOST http://127.0.0.1:7860/sdapi/v1/server-stop
 ```
 
 The pytest base URL is `http://127.0.0.1:7860` (configured in `pyproject.toml`). Python 3.10.6 is the recommended version.
+
+When importing `webui` outside a server context (e.g., in new test files), set `IGNORE_CMD_ARGS_ERRORS=1` first — `conftest.py` does this automatically for the existing tests via `pytest_configure`.
 
 ## Models Directory
 
