@@ -2,11 +2,24 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## First-time Setup
+
+On a fresh machine, run the setup script once before `./webui.sh`:
+
+```bash
+bash .claude/skills/run-stable-diffusion-webui/setup.sh
+```
+
+This script (idempotent, safe to re-run):
+1. Creates `venv/` with `--system-site-packages` from the `comfyui` conda env at `/home/david1/anaconda3/envs/comfyui` (Python 3.10 + `torch 2.6.0+rocm6.2` — no PyTorch download)
+2. Installs CLIP, taming-transformers, dctorch, and `requirements.txt`
+3. Clones the five required repositories into `repositories/`
+4. Applies the six CompVis compatibility patches (see **Compatibility Stubs** below)
+
 ## Running the Application
 
 ```bash
-# Standard launch — venv bootstrap, repo cloning, and dep install are all
-# handled automatically by webui-user.sh on the first run.
+# Standard launch (venv + repos assumed present after setup.sh)
 ./webui.sh
 
 # Skip the 4 GB model download during development/testing
@@ -22,11 +35,26 @@ webui.bat
 **This fork's `webui-user.sh`** configures the environment for AMD Renoir/Cezanne iGPU:
 - Bootstraps `venv/` with `--system-site-packages` on first run (inherits `torch 2.6.0+rocm6.2` from the `comfyui` conda env — no PyTorch download needed)
 - Exports `HSA_OVERRIDE_GFX_VERSION=9.0.0` (required for AMD Renoir ROCm recognition)
-- Passes `--skip-prepare-environment --no-half --skip-torch-cuda-test --do-not-download-clip` automatically
+- Passes `--skip-prepare-environment --no-half --skip-torch-cuda-test --skip-python-version-check --do-not-download-clip` automatically
 
 **Note:** do not pass `--api` — FastAPI 0.94 / starlette 0.26 crash when adding middleware after app start. The Gradio queue and info routes (`/queue/status`, `/info`) still work without it.
 
 Key CLI flags in `modules/cmd_args.py`: `--lowvram`/`--medvram` (VRAM optimization), `--share` (Gradio public link), `--listen` (bind to all interfaces), `--port` (default 7860).
+
+## Smoke Test
+
+```bash
+# Launch with empty checkpoint, run curl checks, take screenshot, then shut down
+bash .claude/skills/run-stable-diffusion-webui/smoke.sh
+
+# Leave the server running after checks (useful during development)
+KEEP_RUNNING=1 bash .claude/skills/run-stable-diffusion-webui/smoke.sh
+
+# Use a different port
+PORT=7861 bash .claude/skills/run-stable-diffusion-webui/smoke.sh
+```
+
+Output: `/tmp/sdwebui-smoke.log` (server log) and `/tmp/sdwebui-screenshot.png`.
 
 ## Linting
 
@@ -40,7 +68,7 @@ npm run lint
 npm run fix
 ```
 
-Ruff ignores E501, E721, E731, I001, C901. The `extensions/` and `extensions-disabled/` directories are excluded from linting.
+Ruff ignores E501, E721, E731, I001, C901, C408, W605. The `extensions/` and `extensions-disabled/` directories are excluded from linting.
 
 ## Testing
 
@@ -69,6 +97,25 @@ curl -XPOST http://127.0.0.1:7860/sdapi/v1/server-stop
 ```
 
 The pytest base URL is `http://127.0.0.1:7860` (configured in `pyproject.toml`). Python 3.10.6 is the recommended version.
+
+## Compatibility Stubs
+
+`Stability-AI/stablediffusion` (the SD2 repo the webui expects) was deleted from GitHub. This fork uses `CompVis/stable-diffusion` as a substitute, with six patches applied by `setup.sh` to `repositories/stable-diffusion-stability-ai/`:
+
+| File | What's patched |
+|---|---|
+| `ldm/modules/midas/__init__.py` + `api.py` | MiDaS depth estimation stub (`ISL_PATHS`, `load_model`) |
+| `ldm/data/util.py` | `AddMiDaS` preprocessing transform stub |
+| `ldm/models/diffusion/ddpm.py` | `LatentDepth2ImageDiffusion`, `LatentInpaintDiffusion` stubs |
+| `ldm/modules/attention.py` | `ATTENTION_MODES` on `BasicTransformerBlock`, `use_linear` on `SpatialTransformer` |
+
+**Impact:** depth-guided img2img (SD2 depth model) is not available. Everything else — txt2img, standard img2img, LoRA, extras, extensions — works normally.
+
+## Known Limitations
+
+- **`--api` flag crashes** — FastAPI 0.94 + starlette 0.26 raise `RuntimeError: Cannot add middleware after an application has started`. Don't pass `--api`.
+- **Depth-guided img2img** — Not available (missing in CompVis base repo; stubs raise `NotImplementedError`).
+- **`xformers` not installed** — Not needed for CPU/ROCm; the webui falls back to standard attention automatically.
 
 ## Architecture
 
