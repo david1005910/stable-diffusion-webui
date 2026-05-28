@@ -13,7 +13,12 @@ bash .claude/skills/run-stable-diffusion-webui/setup.sh
 This script (idempotent, safe to re-run):
 1. Creates `venv/` with `--system-site-packages` from the `comfyui` conda env at `/home/david1/anaconda3/envs/comfyui` (Python 3.10 + `torch 2.6.0+rocm6.2` — no PyTorch download)
 2. Installs CLIP, taming-transformers, dctorch, and `requirements.txt`
-3. Clones the five required repositories into `repositories/`
+3. Clones five repositories into `repositories/`:
+   - `stable-diffusion-stability-ai` — CompVis/stable-diffusion (SD1/SD2 LDM core)
+   - `generative-models` — Stability-AI/generative-models (SDXL)
+   - `k-diffusion` — crowsonkb/k-diffusion (DPM/Karras samplers)
+   - `BLIP` — salesforce/BLIP (image interrogation)
+   - `stable-diffusion-webui-assets` — AUTOMATIC1111/stable-diffusion-webui-assets (fonts/etc.)
 4. Applies the six CompVis compatibility patches (see **Compatibility Stubs** below)
 
 ## Running the Application
@@ -40,6 +45,8 @@ webui.bat
 **Note:** do not pass `--api` — FastAPI 0.94 / starlette 0.26 crash when adding middleware after app start. The Gradio queue and info routes (`/queue/status`, `/info`) still work without it.
 
 Key CLI flags in `modules/cmd_args.py`: `--lowvram`/`--medvram` (VRAM optimization), `--share` (Gradio public link), `--listen` (bind to all interfaces), `--port` (default 7860).
+
+CLI flags can also be passed via the `COMMANDLINE_ARGS` environment variable (parsed in `modules/paths_internal.py`), which is how `webui-user.sh` appends the AMD/ROCm flags without editing `webui.sh`.
 
 ## Smoke Test
 
@@ -97,6 +104,23 @@ curl -XPOST http://127.0.0.1:7860/sdapi/v1/server-stop
 ```
 
 The pytest base URL is `http://127.0.0.1:7860` (configured in `pyproject.toml`). Python 3.10.6 is the recommended version.
+
+## Models Directory
+
+Place model files under `models/` before launching:
+
+| Subdirectory | Content |
+|---|---|
+| `models/Stable-diffusion/` | Checkpoint files (`.ckpt`, `.safetensors`) |
+| `models/VAE/` | VAE weights |
+| `models/Lora/` | LoRA / LyCORIS weights |
+| `models/hypernetworks/` | Hypernetwork weights |
+| `models/embeddings/` (alias: `embeddings/`) | Textual inversion embeddings |
+| `models/GFPGAN/`, `models/Codeformer/` | Face restoration models |
+| `models/ESRGAN/`, `models/RealESRGAN/` | Upscaler models |
+| `models/deepbooru/` | DeepDanbooru tagging model |
+
+The path root is controlled by `--data-dir` (default: repo root) and `--models-dir`.
 
 ## Compatibility Stubs
 
@@ -172,7 +196,63 @@ To write a script, subclass `modules.scripts.Script`:
 - `process(p, *args)` — called before sampling (for modifications)
 - `postprocess(p, processed, *args)` — called after generation
 
-Use `modules.script_callbacks` to hook into events without subclassing `Script` (e.g., `on_image_saved`, `on_ui_tabs`, `on_cfg_denoiser`).
+Use `modules.script_callbacks` to hook into events without subclassing `Script`. Full callback registry:
+
+| Callback | When it fires |
+|---|---|
+| `on_app_started(demo, app)` | Gradio + FastAPI apps are fully initialized |
+| `on_before_reload()` | UI reload is about to happen |
+| `on_model_loaded(sd_model)` | A checkpoint finishes loading |
+| `on_ui_tabs()` | Gradio tabs are being built (return `[(block, name, id)]`) |
+| `on_ui_train_tabs()` | Training subtabs are being built |
+| `on_ui_settings()` | Settings UI is being built (add `OptionInfo` entries) |
+| `on_before_image_saved(params)` | Before an image is written to disk |
+| `on_image_saved(params)` | After an image is written to disk |
+| `on_extra_noise(params)` | Extra noise is injected into the latent |
+| `on_cfg_denoiser(params)` | Each CFG denoiser step |
+| `on_cfg_denoised(params)` | After each CFG step |
+| `on_cfg_after_cfg(params)` | After the CFG combination |
+| `on_before_component(component, **kwargs)` | Before any Gradio component is created |
+| `on_after_component(component, **kwargs)` | After any Gradio component is created |
+| `on_image_grid(params)` | When an image grid is assembled |
+| `on_infotext_pasted(infotext, params)` | When PNG infotext is pasted into the UI |
+| `on_script_unloaded()` | Scripts are being reloaded |
+| `on_before_ui()` | Before the Gradio UI is built |
+| `on_list_optimizers(optimizers)` | Attention optimizer list is assembled |
+| `on_list_unets(unets)` | U-Net override list is assembled |
+| `on_before_token_counter(params)` | Before token counting runs |
+
+### REST API Endpoints
+
+All routes are defined in `modules/api/api.py` under the `/sdapi/v1/` prefix:
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/txt2img` | Text-to-image generation |
+| POST | `/img2img` | Image-to-image generation |
+| POST | `/extra-single-image` | Upscale / post-process one image |
+| POST | `/extra-batch-images` | Upscale / post-process multiple images |
+| POST | `/png-info` | Extract metadata from a PNG |
+| GET | `/progress` | Current generation progress |
+| POST | `/interrogate` | CLIP/DeepDanbooru image captioning |
+| POST | `/interrupt` | Cancel the current generation |
+| POST | `/skip` | Skip to next image in batch |
+| GET/POST | `/options` | Read or write `shared.opts` settings |
+| GET | `/cmd-flags` | Read CLI flags |
+| GET | `/samplers`, `/schedulers` | Available sampler/scheduler names |
+| GET | `/upscalers`, `/latent-upscale-modes` | Upscaler info |
+| GET | `/sd-models`, `/sd-vae` | Checkpoint and VAE lists |
+| GET | `/embeddings`, `/hypernetworks` | Loaded embedding/hypernetwork info |
+| POST | `/refresh-checkpoints`, `/refresh-vae`, `/refresh-embeddings` | Rescan disk |
+| POST | `/create/embedding`, `/create/hypernetwork` | Create new embedding/hypernetwork |
+| POST | `/train/embedding`, `/train/hypernetwork` | Train embedding/hypernetwork |
+| GET | `/memory` | RAM/VRAM usage |
+| POST | `/unload-checkpoint`, `/reload-checkpoint` | VRAM management |
+| GET | `/scripts`, `/script-info` | Loaded script list and metadata |
+| GET | `/extensions` | Installed extension list |
+| POST | `/server-stop`, `/server-restart`, `/server-kill` | Server control (test mode only) |
+
+The interactive Swagger docs are available at `http://localhost:7860/docs` when the server is running.
 
 ### Model Support
 
