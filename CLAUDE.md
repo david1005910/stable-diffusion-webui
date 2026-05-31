@@ -12,7 +12,7 @@ bash .claude/skills/run-stable-diffusion-webui/setup.sh
 
 This script (idempotent, safe to re-run):
 1. Creates `venv/` with `--system-site-packages` from the `comfyui` conda env at `/home/david1/anaconda3/envs/comfyui` (Python 3.10 + `torch 2.6.0+rocm6.2` — no PyTorch download)
-2. Installs CLIP, taming-transformers, dctorch, `requirements.txt`, and pins `gradio-client==0.5.0` and `pydantic<2` (see **Known Limitations**)
+2. Installs CLIP, taming-transformers, dctorch, `requirements.txt`, and pins `gradio-client==0.5.0`, `pydantic<2`, and `transformers==4.30.2` (see **Known Limitations**)
 3. Clones five repositories into `repositories/`:
    - `stable-diffusion-stability-ai` — CompVis/stable-diffusion (SD1/SD2 LDM core)
    - `generative-models` — Stability-AI/generative-models (SDXL)
@@ -151,6 +151,7 @@ The path root is controlled by `--data-dir` (default: repo root) and `--models-d
 - **Depth-guided img2img** — Not available (missing in CompVis base repo; stubs raise `NotImplementedError`).
 - **`xformers` not installed** — Not needed for CPU/ROCm; the webui falls back to standard attention automatically.
 - **pydantic v2 / gradio-client v2 incompatible** — `fastapi==0.94.0` requires pydantic v1 (`pydantic.fields.Undefined` was removed in v2); `gradio==3.41.2` requires `gradio-client==0.5.0` exactly (the `serializing` module was dropped in 2.x). `setup.sh` pins both after `requirements.txt`.
+- **transformers ≥ 5 breaks CLIP loading** — `CLIPTextModel.text_model` was removed in transformers 5.x; `modules/sd_hijack.py:238` accesses it directly. The comfyui conda env ships 5.9.0, which overrides `requirements.txt`'s `transformers==4.30.2` via `--system-site-packages`. `setup.sh` re-pins `transformers==4.30.2` in the venv after `requirements.txt`.
 
 ## Architecture
 

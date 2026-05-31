@@ -39,7 +39,8 @@ if [ "${SKIP_VENV:-0}" != "1" ]; then
   # Pin versions that pip may resolve to incompatible newer releases:
   #   gradio==3.41.2 requires gradio-client==0.5.0 exactly (2.x removed serializing module)
   #   fastapi==0.94.0 requires pydantic v1 (pydantic v2 removed Undefined from pydantic.fields)
-  "$PIP" install "gradio-client==0.5.0" "pydantic<2" -q
+  #   transformers>=5 removes CLIPTextModel.text_model; webui sd_hijack accesses it directly
+  "$PIP" install "gradio-client==0.5.0" "pydantic<2" "transformers==4.30.2" -q
 else
   echo "SKIP_VENV=1: skipping venv and pip steps — cloning repos and applying patches only."
 fi
