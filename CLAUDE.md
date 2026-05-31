@@ -12,7 +12,7 @@ bash .claude/skills/run-stable-diffusion-webui/setup.sh
 
 This script (idempotent, safe to re-run):
 1. Creates `venv/` with `--system-site-packages` from the `comfyui` conda env at `/home/david1/anaconda3/envs/comfyui` (Python 3.10 + `torch 2.6.0+rocm6.2` — no PyTorch download)
-2. Installs CLIP, taming-transformers, dctorch, and `requirements.txt`
+2. Installs CLIP, taming-transformers, dctorch, `requirements.txt`, and pins `gradio-client==0.5.0` and `pydantic<2` (see **Known Limitations**)
 3. Clones five repositories into `repositories/`:
    - `stable-diffusion-stability-ai` — CompVis/stable-diffusion (SD1/SD2 LDM core)
    - `generative-models` — Stability-AI/generative-models (SDXL)
@@ -20,6 +20,12 @@ This script (idempotent, safe to re-run):
    - `BLIP` — salesforce/BLIP (image interrogation)
    - `stable-diffusion-webui-assets` — AUTOMATIC1111/stable-diffusion-webui-assets (fonts/etc.)
 4. Applies the six CompVis compatibility patches (see **Compatibility Stubs** below)
+
+Set `SKIP_VENV=1` to skip steps 1–2 (venv/pip) and only perform steps 3–4 — used when Pinokio manages its own venv:
+
+```bash
+SKIP_VENV=1 bash .claude/skills/run-stable-diffusion-webui/setup.sh
+```
 
 ## Running the Application
 
@@ -144,6 +150,7 @@ The path root is controlled by `--data-dir` (default: repo root) and `--models-d
 - **`--api` flag crashes** — FastAPI 0.94 + starlette 0.26 raise `RuntimeError: Cannot add middleware after an application has started`. Don't pass `--api`.
 - **Depth-guided img2img** — Not available (missing in CompVis base repo; stubs raise `NotImplementedError`).
 - **`xformers` not installed** — Not needed for CPU/ROCm; the webui falls back to standard attention automatically.
+- **pydantic v2 / gradio-client v2 incompatible** — `fastapi==0.94.0` requires pydantic v1 (`pydantic.fields.Undefined` was removed in v2); `gradio==3.41.2` requires `gradio-client==0.5.0` exactly (the `serializing` module was dropped in 2.x). `setup.sh` pins both after `requirements.txt`.
 
 ## Architecture
 
@@ -182,12 +189,15 @@ User (Browser/API client)
 
 ### Global State (`modules/shared`)
 
-The `modules.shared` module is a global namespace (not a class instance). Commonly accessed fields:
-- `shared.sd_model` — currently loaded diffusion model
-- `shared.opts` — persistent user settings (`Options` object, saved to `config.json`)
-- `shared.state` — generation state (progress, interrupt flag, job info)
-- `shared.cmd_opts` — parsed CLI arguments
-- `shared.device` — active torch device
+`modules.shared` is a global namespace (not a class instance) that re-exports from sub-modules — when grepping, check the sub-module directly:
+
+| Attribute | Defined in |
+|---|---|
+| `shared.cmd_opts`, `shared.parser` | `modules/shared_cmd_options.py` |
+| `shared.state` (progress, interrupt) | `modules/shared_state.py` |
+| `shared.opts` (user settings → `config.json`) | `modules/shared_options.py` |
+| `shared.sd_model`, `shared.device` | `modules/shared.py` top-level |
+| `shared.OptionInfo` registrations | `modules/shared_options.py` + callback `on_ui_settings` |
 
 ### Extension / Script System
 
@@ -199,6 +209,12 @@ To write a script, subclass `modules.scripts.Script`:
 - `run(p, *args)` — called for generation (override for exclusive control)
 - `process(p, *args)` — called before sampling (for modifications)
 - `postprocess(p, processed, *args)` — called after generation
+
+To add a new `<syntax:name:weight>` extra-network (like LoRA), subclass `modules.extra_networks.ExtraNetwork`:
+- `activate(p, params_list)` — called before sampling; `params_list` is a list of `ExtraNetworkParams`
+- `deactivate(p)` — called after sampling to undo any model patches
+
+Register with `modules.extra_networks.register_extra_network(instance)` from an `on_before_ui` callback.
 
 Use `modules.script_callbacks` to hook into events without subclassing `Script`. Full callback registry:
 
@@ -261,6 +277,8 @@ The interactive Swagger docs are available at `http://localhost:7860/docs` when 
 ### Model Support
 
 The codebase handles SD1.x, SD2.x, SDXL, SSD-1B, and SD3. Model type detection happens in `modules/sd_models.py` and `modules/sd_models_config.py`. SD3-specific code is in `modules/models/sd3/`. SDXL-specific handling is in `modules/sd_models_xl.py`.
+
+LDM architecture configs live in `configs/*.yaml` (e.g. `v1-inference.yaml`, `sd_xl_inpaint.yaml`, `sd3-inference.yaml`). `modules/sd_models_config.py` picks the right YAML based on the checkpoint's state-dict shape — this is where to look if a model type is misidentified.
 
 ### Frontend
 

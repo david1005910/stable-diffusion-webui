@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # One-time environment setup for stable-diffusion-webui.
 # Run once from the repo root. Safe to re-run (idempotent).
-# Requires: git, the comfyui conda env's Python 3.10 (has torch+ROCm).
+#
+# Two modes:
+#   Default (SKIP_VENV unset):  creates venv/ inheriting torch from comfyui conda env
+#   SKIP_VENV=1:                skips venv/pip steps — only clones repos + applies patches
+#                               (used by Pinokio's install.js which manages its own venv)
 set -euo pipefail
 
 REPO=/home/david1/문서/stable-diffusion-webui-master
@@ -10,27 +14,35 @@ VENV="$REPO/venv"
 
 cd "$REPO"
 
-# ── 1. Python venv (inherits comfyui env's torch 2.6+ROCm) ───────────────────
-if [ ! -f "$VENV/bin/python" ]; then
-  echo "Creating venv..."
-  "$COMFYUI_PYTHON" -m venv --system-site-packages "$VENV"
+if [ "${SKIP_VENV:-0}" != "1" ]; then
+  # ── 1. Python venv (inherits comfyui env's torch 2.6+ROCm) ─────────────────
+  if [ ! -f "$VENV/bin/python" ]; then
+    echo "Creating venv..."
+    "$COMFYUI_PYTHON" -m venv --system-site-packages "$VENV"
+  fi
+
+  PIP="$VENV/bin/pip"
+
+  # ── 2. Core Python packages ─────────────────────────────────────────────────
+  echo "Installing requirements..."
+  "$PIP" install --upgrade pip setuptools -q
+
+  # CLIP can't be built in an isolated env (missing pkg_resources in build env)
+  "$PIP" install "https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip" \
+    --no-build-isolation -q
+
+  # taming-transformers and dctorch are needed by the ldm + k-diffusion repos
+  "$PIP" install taming-transformers-rom1504 dctorch -q
+
+  "$PIP" install -r requirements.txt -q
+
+  # Pin versions that pip may resolve to incompatible newer releases:
+  #   gradio==3.41.2 requires gradio-client==0.5.0 exactly (2.x removed serializing module)
+  #   fastapi==0.94.0 requires pydantic v1 (pydantic v2 removed Undefined from pydantic.fields)
+  "$PIP" install "gradio-client==0.5.0" "pydantic<2" -q
+else
+  echo "SKIP_VENV=1: skipping venv and pip steps — cloning repos and applying patches only."
 fi
-
-PIP="$VENV/bin/pip"
-PYTHON="$VENV/bin/python"
-
-# ── 2. Core Python packages ───────────────────────────────────────────────────
-echo "Installing requirements..."
-"$PIP" install --upgrade pip setuptools -q
-
-# CLIP can't be built in an isolated env (missing pkg_resources in build env)
-"$PIP" install "https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip" \
-  --no-build-isolation -q
-
-# taming-transformers and dctorch are needed by the ldm + k-diffusion repos
-"$PIP" install taming-transformers-rom1504 dctorch -q
-
-"$PIP" install -r requirements.txt -q
 
 # ── 3. Clone required git repositories ───────────────────────────────────────
 REPOS="$REPO/repositories"
