@@ -133,6 +133,8 @@ def encode_pil_to_base64(image):
 
 
 def api_middleware(app: FastAPI):
+    # Allow adding middleware after Gradio has already started the app
+    app.middleware_stack = None
     rich_available = False
     try:
         if os.environ.get('WEBUI_RICH_EXCEPTIONS', None) is not None:
@@ -194,6 +196,8 @@ def api_middleware(app: FastAPI):
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, e: HTTPException):
         return handle_exception(request, e)
+
+    app.build_middleware_stack()
 
 
 class Api:
