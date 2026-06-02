@@ -19,7 +19,7 @@ This script (idempotent, safe to re-run):
    - `k-diffusion` — crowsonkb/k-diffusion (DPM/Karras samplers)
    - `BLIP` — salesforce/BLIP (image interrogation)
    - `stable-diffusion-webui-assets` — AUTOMATIC1111/stable-diffusion-webui-assets (fonts/etc.)
-4. Applies the six CompVis compatibility patches (see **Compatibility Stubs** below)
+4. Applies four compatibility patch groups to the CompVis repo (see **Compatibility Stubs** below)
 
 Set `SKIP_VENV=1` to skip steps 1–2 (venv/pip) and only perform steps 3–4 — used when Pinokio manages its own venv:
 
@@ -50,7 +50,7 @@ webui.bat
 - Sets `TORCH_COMMAND="echo '...skipping'"` — prevents `launch.py` from downloading a 2 GB PyTorch wheel if `--skip-prepare-environment` is ever removed
 - Sets `STABLE_DIFFUSION_REPO` / `STABLE_DIFFUSION_COMMIT_HASH` — redirect `launch.py`'s git-fetch from the deleted Stability AI repo to the CompVis substitute
 
-**Note:** do not pass `--api` — FastAPI 0.94 / starlette 0.26 crash when adding middleware after app start. The Gradio queue and info routes (`/queue/status`, `/info`) still work without it.
+Set `WEBUI_LAUNCH_LIVE_OUTPUT=1` to print subprocess output live (useful when debugging launch_utils dependency installation).
 
 Key CLI flags in `modules/cmd_args.py`: `--lowvram`/`--medvram` (VRAM optimization), `--share` (Gradio public link), `--listen` (bind to all interfaces), `--port` (default 7860).
 
@@ -134,7 +134,7 @@ The path root is controlled by `--data-dir` (default: repo root) and `--models-d
 
 ## Compatibility Stubs
 
-`Stability-AI/stablediffusion` (the SD2 repo the webui expects) was deleted from GitHub. This fork uses `CompVis/stable-diffusion` as a substitute, with six patches applied by `setup.sh` to `repositories/stable-diffusion-stability-ai/`:
+`Stability-AI/stablediffusion` (the SD2 repo the webui expects) was deleted from GitHub. This fork uses `CompVis/stable-diffusion` as a substitute, with four patch groups applied by `setup.sh` to `repositories/stable-diffusion-stability-ai/` (5 files total):
 
 | File | What's patched |
 |---|---|
@@ -147,7 +147,6 @@ The path root is controlled by `--data-dir` (default: repo root) and `--models-d
 
 ## Known Limitations
 
-- **`--api` flag crashes** — FastAPI 0.94 + starlette 0.26 raise `RuntimeError: Cannot add middleware after an application has started`. Don't pass `--api`.
 - **Depth-guided img2img** — Not available (missing in CompVis base repo; stubs raise `NotImplementedError`).
 - **`xformers` not installed** — Not needed for CPU/ROCm; the webui falls back to standard attention automatically.
 - **pydantic v2 / gradio-client v2 incompatible** — `fastapi==0.94.0` requires pydantic v1 (`pydantic.fields.Undefined` was removed in v2); `gradio==3.41.2` requires `gradio-client==0.5.0` exactly (the `serializing` module was dropped in 2.x). `setup.sh` pins both after `requirements.txt`.
@@ -203,6 +202,13 @@ User (Browser/API client)
 ### Extension / Script System
 
 **Custom scripts** go in `scripts/`. Built-in extensions live in `extensions-builtin/`; user-installed extensions in `extensions/`.
+
+Extensions that need custom CLI flags define a top-level `preload(parser)` function in their `scripts/` directory. This is called before any extension imports, during argparse setup. Example (from the LoRA extension):
+
+```python
+def preload(parser):
+    parser.add_argument("--lora-dir", type=str, help="...", default=None)
+```
 
 To write a script, subclass `modules.scripts.Script`:
 - `title()` — display name
