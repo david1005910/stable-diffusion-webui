@@ -154,11 +154,30 @@ The path root is controlled by `--data-dir` (default: repo root) and `--models-d
 
 ## Architecture
 
+### Startup Sequence
+
+`launch.py` is the true entry point; `webui.sh` just activates the venv and execs it.
+
+```
+launch.py
+  → launch_utils.prepare_environment()   # pip installs, repo clones (skipped with --skip-prepare-environment)
+  → launch_utils.start()                 # re-executes with venv python → imports webui
+      webui.py: initialize.imports()     # torch, gradio, ldm, sgm, shared
+      webui.py: initialize.check_versions()
+      webui.py: initialize.initialize()  # models dir, codeformer/gfpgan, initialize_rest()
+          initialize_rest()              # samplers, extensions, scripts, upscalers, VAE, embeddings, optimizers
+      → api_only()   if --nowebui        # mounts FastAPI only, no Gradio
+      → webui()      otherwise           # builds Gradio Blocks, mounts FastAPI, starts uvicorn
+```
+
+All generation requests (UI or API) go through `modules/call_queue.py` which serializes them — only one generation runs at a time. The queue wraps the processing pipeline and gates on `shared.state`.
+
 ### Request Flow
 
 ```
 User (Browser/API client)
   → Gradio UI (modules/ui.py)  OR  REST API (modules/api/api.py)
+  → modules/call_queue.py  (serializes; wraps wrap_gradio_gpu_call / queue_lock)
   → Processing pipeline (modules/processing.py)
       → Model loading (modules/sd_models.py)
       → Text encoding (CLIP via modules/sd_hijack.py)
@@ -186,6 +205,9 @@ User (Browser/API client)
 | `modules/api/api.py` | FastAPI endpoints: `/sdapi/v1/txt2img`, `/sdapi/v1/img2img`, etc. |
 | `modules/images.py` | Image save/load, PNG metadata, grid generation |
 | `modules/devices.py` | CUDA/MPS/CPU detection, dtype helpers |
+| `modules/call_queue.py` | Serializes generation requests; `wrap_gradio_gpu_call` gates on `shared.state` |
+| `modules/initialize.py` | Startup orchestration: `imports()`, `initialize()`, `initialize_rest()` |
+| `modules/errors.py` | Centralized exception reporting; `display(e, task)` for consistent tracebacks |
 
 ### Global State (`modules/shared`)
 
@@ -201,7 +223,7 @@ User (Browser/API client)
 
 ### Extension / Script System
 
-**Custom scripts** go in `scripts/`. Built-in extensions live in `extensions-builtin/`; user-installed extensions in `extensions/`.
+**Custom scripts** go in `scripts/`. Built-in scripts include `xyz_grid.py` (parameter sweeps), `prompt_matrix.py`, `loopback.py`, `img2imgalt.py`, and several outpainting/upscaling scripts. Built-in extensions live in `extensions-builtin/`; user-installed extensions in `extensions/`.
 
 Extensions that need custom CLI flags define a top-level `preload(parser)` function in their `scripts/` directory. This is called before any extension imports, during argparse setup. Example (from the LoRA extension):
 
@@ -290,3 +312,5 @@ LDM architecture configs live in `configs/*.yaml` (e.g. `v1-inference.yaml`, `sd
 ### Frontend
 
 Gradio generates the HTML/JS shell. Additional interactivity is in `javascript/` (vanilla JS). Custom HTML fragments are in `html/`. The Gradio component tree is built in `modules/ui.py` using `gr.Blocks` context managers; component references are stored in `modules/shared.settings_components` after UI initialization.
+
+Key JS globals injected by Gradio (declared in `.eslintrc.js` so ESLint doesn't flag them): `gradioApp`, `opts`, `all_gallery_buttons`, `localSet`/`localGet` (localStorage wrappers), and the `switch_to_*` tab-switching functions generated from tab IDs in `modules/ui.py`.
